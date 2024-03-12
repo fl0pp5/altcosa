@@ -102,7 +102,7 @@ case "$ARCH" in
         ;;
 esac
 
-partx -a "$OPT_DISK"
+partprobe "$OPT_DISK"
 
 case "$ARCH" in
     x86_64)
