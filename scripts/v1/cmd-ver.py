@@ -2,6 +2,7 @@
 
 import argparse
 import dataclasses
+import datetime
 import enum
 import sys
 import typing
@@ -121,13 +122,17 @@ class CliOptions:
         :return: instance of incremented version
         :rtype: Version
         """
+        today = datetime.datetime.now().strftime("%Y%m%d")
+        if version.date != today:
+            version.date = today
+            version.major = version.minor = 0
+            return version
+
         match self.inc_part:
             case VersionPart.MINOR:
                 version.minor += 1
             case VersionPart.MAJOR:
                 version.major += 1
-            case VersionPart.DATE:
-                version = Version(0, 0, version.branch, version.name)
 
         return version
 
