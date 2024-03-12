@@ -189,9 +189,13 @@ def main() -> None:
     parser.add_argument(
         "-c", "--check",
         help="check the passed arguments and exit (need for compability with config API)",
+        action="store_true"
     )
 
     args = parser.parse_args()
+
+    if args.check:
+        sys.exit(0)
 
     stream = Stream.from_str(args.repodir, args.stream)
     mode = OSTree.RepoMode.BARE if args.mode == "bare" else OSTree.RepoMode.ARCHIVE

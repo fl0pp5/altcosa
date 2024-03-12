@@ -28,7 +28,6 @@ def main() -> None:
         with open(args.preset_file) as file:
             Storage().pool.update(json.load(file))
 
-    print(Storage().pool)
     config = Config.model_validate(content)
 
     Executor(config).execute()

@@ -1,0 +1,51 @@
+version: 1
+
+define:
+- name: stream
+  value: "altcos/{{ arch }}/{{ branch }}/{{ name }}"
+
+pipe:
+- name: checkout.sh@1
+  args:
+    src: "{{ stream }}"
+    dest: "{{ stream }}"
+    repodir: "{{ repodir }}"
+    mode: bare
+  as_root: true
+
+- name: apt.sh@1
+  args:
+    stream: "{{ stream }}"
+    repodir: "{{ repodir }}"
+    action: update
+  as_root: true
+
+- name: apt.sh@1
+  args:
+    stream: "{{ stream }}"
+    repodir: "{{ repodir }}"
+    action: dist-upgrade
+  as_root: true
+
+- name: commit.sh@1
+  args:
+    stream: "{{ stream }}"
+    repodir: "{{ repodir }}"
+    mode: "bare"
+    next: "minor"
+    message: "'update packages'"
+  as_root: true
+
+- name: pull-to-archive.sh@1
+  args:
+    stream: "{{ stream }}"
+    repodir: "{{ repodir }}"
+  as_root: true
+
+- name: pkgdiff.py@1
+  args:
+    stream: "'{{ stream }}'"
+    repodir: "'{{ repodir }}'"
+    mode: "archive"
+    w: ""
+  as_root: true
