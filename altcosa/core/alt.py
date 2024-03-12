@@ -6,11 +6,11 @@ import enum
 import pathlib
 import typing
 
-import gi
+import gi  # type: ignore
 
 gi.require_version("OSTree", "1.0")
 
-from gi.repository import GLib, Gio, OSTree  # noqa: I202,E402
+from gi.repository import GLib, Gio, OSTree  # type: ignore # noqa: I202,E402
 
 
 class OSName(enum.StrEnum):

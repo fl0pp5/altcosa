@@ -8,11 +8,11 @@ import typing
 
 from loguru import logger
 
-import gi  # noqa: I100
+import gi  # type: ignore # noqa: I100
 
 gi.require_version("OSTree", "1.0")
 
-from gi.repository import GLib, OSTree  # noqa: I202,E402
+from gi.repository import GLib, OSTree  # type: ignore # noqa: I202,E402
 
 from altcosa.core.alt import Commit, Repository, Stream, Version  # noqa: E402
 

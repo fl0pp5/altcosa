@@ -8,8 +8,6 @@ __name="$(basename "$0")"
 # shellcheck disable=SC1091
 source "$__dir"/cmdlib.sh
 
-check_root_uid
-
 __usage="Usage: $__name [OPTIONS]...
 Build qcow2-image based on stream repository
 
@@ -21,6 +19,7 @@ Arguments:
         --repodir - ALTCOS repository root directory (required)
         --imagedir - images directory (required)
         --mode - OSTree repository mode (required)
+        --mipdir - mkimage-profiles root directory (required)
 
         -a, --api - print API-like arguments
         -h, --help - print this message
@@ -32,6 +31,7 @@ OPT_NAME=
 OPT_REPODIR=
 OPT_IMAGEDIR=
 OPT_MODE=
+OPT_MIPDIR=
 
 # this two variables need to appear in API string (get_cmd_api)
 # they checks by getopt bottom
@@ -43,7 +43,7 @@ OPT_HELP=
 OPT_CHECK=0
 
 # shellcheck disable=SC2154
-valid_args=$(getopt -o 'ahc' --long 'api,help,check,arch:,branch:,name:,repodir:,imagedir:,mode:' --name "$__name" -- "$@")
+valid_args=$(getopt -o 'ahc' --long 'api,help,check,arch:,branch:,name:,repodir:,imagedir:,mode:,mipdir:' --name "$__name" -- "$@")
 eval set -- "$valid_args"
 
 while true ; do
@@ -80,6 +80,10 @@ while true ; do
             esac
             shift 2
             ;;
+        --mipdir)
+            OPT_MIPDIR=$2
+            shift 2
+            ;; 
         -a|--api)
             echo -n "$(get_cmd_api)"
             exit;;
@@ -105,6 +109,7 @@ done
 : "${OPT_REPODIR:?Missing --repodir option}"
 : "${OPT_IMAGEDIR:?Missing --imagedir option}"
 : "${OPT_MODE:?Missing --mode option}"
+: "${OPT_MIPDIR:?Missing --mipdir option}"
 
 if [ "$OPT_CHECK" -eq 1 ]; then
     exit
@@ -112,14 +117,8 @@ fi
 
 export_stream_by_parts "$OPT_ARCH" "$OPT_BRANCH" "$OPT_REPODIR" "$OPT_NAME"
 
-ROOT_SIZE=4G
-PLATFORM=qemu
-FORMAT=qcow2
-
-EFI_SUPPORT=0
-if efibootmgr; then
-    EFI_SUPPORT=1
-fi
+PLATFORM=metal
+FORMAT=iso
 
 # shellcheck disable=SC2153
 COMMIT="$(get_commit "$STREAM" "$OPT_REPODIR" "$OPT_MODE")"
@@ -139,38 +138,35 @@ VERSION_PATH="$(python3 "$__dir"/cmd-ver.py \
 COMMIT_DIR="$VARS_DIR"/"$VERSION_PATH"/var
 
 ARTIFACT_DIR="$OPT_IMAGEDIR"/"$OPT_BRANCH"/"$OPT_ARCH"/"$OPT_NAME"/"$VERSION"/"$PLATFORM"/"$FORMAT"
-mkdir -p "$ARTIFACT_DIR"
+
+echo "$PASSWORD" | sudo -S mkdir -p "$ARTIFACT_DIR"
+echo "$PASSWORD" | sudo -S chmod -R 755 "$ARTIFACT_DIR"
 
 IMAGE_FILE="$ARTIFACT_DIR"/"$OPT_BRANCH"_"$OPT_NAME"."$OPT_ARCH"."$VERSION"."$PLATFORM"."$FORMAT"
 
-RAW_FILE=$(mktemp --tmpdir "$(basename "$0")"-XXXXXX.raw)
-TMPDIR=$(mktemp --tmpdir -d "$(basename "$0")"-XXXXXX)
+RPMBUILD_DIR="$(mktemp --tmpdir -d "$(basename "$0")"_rpmbuild-XXXXXX)"
+mkdir "$RPMBUILD_DIR"/SOURCES
 
-TMPDIR_BOOT="$TMPDIR/boot"
-TMPDIR_EFI="$TMPDIR/efi"
-TMPDIR_REPO="$TMPDIR/ostree/repo"
+APT_DIR="$HOME"/apt
 
-fallocate -l "$ROOT_SIZE" "$RAW_FILE"
+CUR_DIR="$(pwd)"
+cd "$__dir"/specs/startup-installer-altcos
+# shellcheck disable=SC2153
+gear-rpm \
+    -bb \
+    --define "stream $STREAM" \
+    --define "_rpmdir $APT_DIR/$ARCH/RPMS.dir/" \
+    --define "_rpmfilename startup-installer-altcos-0.2.5-alt1.x86_64.rpm"
+cd "$CUR_DIR"
 
-LOOP_DEV=$(losetup --show -f "$RAW_FILE")
+echo "$PASSWORD" | sudo -S tar -cf - \
+    -C "$(dirname "$COMMIT_DIR")" var \
+    | xz -9 -c -T0 --memlimit=2048MiB - > "$RPMBUILD_DIR"/SOURCES/var.tar.xz
 
-EFI_PART="$LOOP_DEV"p2
-BOOT_PART="$LOOP_DEV"p3
-ROOT_PART="$LOOP_DEV"p4
+mkdir "$RPMBUILD_DIR"/altcos_root
 
-"$__dir"/create_disk.sh --stream "$STREAM" --repodir "$OPT_REPODIR" --disk "$LOOP_DEV"
-
-mount "$ROOT_PART" "$TMPDIR"
-
-mkdir -p "$TMPDIR_EFI"
-mount "$EFI_PART" "$TMPDIR_EFI"
-
-mkdir -p "$TMPDIR_BOOT"
-mount "$BOOT_PART" "$TMPDIR_BOOT"
-
-ostree admin \
-    init-fs \
-    --modern "$TMPDIR"
+ostree admin init-fs \
+    --modern "$RPMBUILD_DIR"/altcos_root
 
 OSTREE_DIR=
 case "$OPT_MODE" in
@@ -182,70 +178,35 @@ case "$OPT_MODE" in
         ;;
 esac
 
-ostree pull-local \
-    --repo "$TMPDIR_REPO" \
+echo "$PASSWORD" | sudo -S ostree \
+    pull-local \
+    --repo "$RPMBUILD_DIR"/altcos_root/ostree/repo \
     "$OSTREE_DIR" \
-    "$COMMIT"
+    "$STREAM"
 
-"$__dir"/grub_disk.sh --stream "$STREAM" --repodir "$OPT_REPODIR" --disk "$LOOP_DEV" --mount "$TMPDIR"
+echo "$PASSWORD" | sudo -S tar -cf - -C "$RPMBUILD_DIR"/altcos_root . \
+    | xz -9 -c -T0 --memlimit=2048MiB - > "$RPMBUILD_DIR"/SOURCES/altcos_root.tar.xz
+echo "$PASSWORD" | sudo -S rm -rf "$RPMBUILD_DIR"/altcos_root
 
-ln -s ../loader/grub.cfg "$TMPDIR"/boot/grub/grub.cfg
+rpmbuild \
+    --define "_topdir $RPMBUILD_DIR" \
+    --define "_rpmdir $APT_DIR/$ARCH/RPMS.dir/" \
+    --define "_rpmfilename altcos-archives-0.1-alt1.x86_64.rpm" \
+    -bb "$__dir"/specs/altcos-archives.spec
 
-ostree config \
-    --repo "$TMPDIR_REPO" \
-    set sysroot.bootloader grub2
+echo "$PASSWORD" | sudo -S rm -rf "$RPMBUILD_DIR"
 
-ostree config \
-    --repo "$TMPDIR_REPO" \
-    set sysroot.readonly true
+echo "$PASSWORD" | sudo -S chmod a+w "$OPT_IMAGEDIR"
 
-# shellcheck disable=SC2153
-ostree refs \
-    --repo "$TMPDIR_REPO" \
-    --create altcos:"$STREAM" \
-    "$COMMIT"
+make \
+    -C "$OPT_MIPDIR" \
+    APTCONF="$APT_DIR"/apt.conf."$OPT_BRANCH"."$OPT_ARCH" \
+    BRANCH="$OPT_BRANCH" \
+    IMAGEDIR="$OPT_IMAGEDIR" \
+    live-install-altcos.iso
 
-ostree admin \
-    os-init "$OSNAME" \
-    --sysroot "$TMPDIR"
+mv "$(realpath "$OPT_IMAGEDIR"/live-install-altcos-latest-x86_64.iso)" "$IMAGE_FILE"
 
-OSTREE_BOOT_PARTITION="/boot" ostree admin deploy altcos:"$STREAM" \
-    --sysroot "$TMPDIR" \
-    --os "$OSNAME" \
-    --karg-append=ignition.platform.id=qemu \
-    --karg-append=\$ignition_firstboot \
-    --karg-append=net.ifnames=0 \
-    --karg-append=biosdevname=0 \
-    --karg-append=rw \
-    --karg-append=quiet \
-    --karg-append=root=UUID="$(blkid --match-tag UUID -o value "$ROOT_PART")"
-
-rm -rf "$TMPDIR"/ostree/deploy/"$OSNAME"/var
-
-rsync -av "$COMMIT_DIR" \
-        "$TMPDIR"/ostree/deploy/"$OSNAME"
-
-touch "$TMPDIR"/ostree/deploy/"$OSNAME"/var/.ostree-selabeled
-touch "$TMPDIR"/boot/ignition.firstboot
-
-if [ "$EFI_SUPPORT" -eq 1 ]; then
-    mkdir -p "$TMPDIR_EFI"/EFI/BOOT
-    mv "$TMPDIR_EFI"/EFI/altlinux/shimx64.efi "$TMPDIR_EFI"/EFI/BOOT/bootx64.efi
-    mv "$TMPDIR_EFI"/EFI/altlinux/{grubx64.efi,grub.cfg} "$TMPDIR_EFI"/EFI/BOOT/
-fi
-
-echo "UUID=$(blkid --match-tag UUID -o value "$BOOT_PART") /boot ext4 ro,nosuid,nodev,relatime,seclabel 1 2" \
-    >> "$TMPDIR"/ostree/deploy/"$OSNAME"/deploy/"$COMMIT".0/etc/fstab
-
-for dir in bin sbin libx32 lib lib64; do
-    ln -sf ./deploy/"$COMMIT".0/"$dir"  "$TMPDIR"/ostree/deploy/altcos/"$dir"
-done
-
-umount -R "$TMPDIR"
-rm -rf "$TMPDIR"
-losetup -d "$LOOP_DEV"
-
-qemu-img convert -O qcow2 "$RAW_FILE" "$IMAGE_FILE"
-rm "$RAW_FILE"
+find "$OPT_IMAGEDIR" -type l -delete
 
 echo "$IMAGE_FILE"
