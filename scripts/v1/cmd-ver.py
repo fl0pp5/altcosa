@@ -122,6 +122,10 @@ class CliOptions:
         :return: instance of incremented version
         :rtype: Version
         """
+
+        if not self.inc_part:
+            return version
+
         today = datetime.datetime.now().strftime("%Y%m%d")
         if version.date != today:
             version.date = today
